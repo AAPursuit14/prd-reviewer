@@ -56,7 +56,7 @@ export default async function handler(req, res) {
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "anthropic/claude-sonnet-4",
+        model: "openrouter/free",
         max_tokens: 1500,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
