@@ -68,8 +68,14 @@ async function reviewPRD(text) {
     body: JSON.stringify({ prd: text }),
   });
   if (!res.ok) {
-    const errBody = await res.text();
-    throw new Error(`Review failed (${res.status}): ${errBody}`);
+    let msg = `Review failed (${res.status})`;
+    try {
+      const errData = await res.json();
+      if (errData.error) msg = errData.error;
+    } catch {
+      // If error response isn't JSON, use the default message
+    }
+    throw new Error(msg);
   }
   return await res.json();
 }
@@ -97,13 +103,16 @@ export default function App() {
   const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState("submit");
   const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [showCSVPanel, setShowCSVPanel] = useState(false);
-  const [copyStatus, setCopyStatus] = useState("");
 
   const addToQueue = useCallback(() => {
-    if (!currentText.trim()) return;
+    const trimmed = currentText.trim();
+    if (!trimmed) return;
+    if (trimmed.length < 50) {
+      alert("PRD content is too short. A reviewable PRD should include a problem statement, features, target users, and tech stack.");
+      return;
+    }
     const label = currentLabel.trim() || `PRD ${queue.length + 1}`;
-    setQueue((q) => [...q, { id: Date.now(), label, text: currentText.trim() }]);
+    setQueue((q) => [...q, { id: Date.now(), label, text: trimmed }]);
     setCurrentText("");
     setCurrentLabel("");
   }, [currentText, currentLabel, queue.length]);
@@ -136,20 +145,21 @@ export default function App() {
   const clearReviews = useCallback(() => {
     setReviews([]);
     setExpandedId(null);
-    setShowCSVPanel(false);
   }, []);
 
   const completedReviews = reviews.filter((r) => r.result);
 
-  const copyCSV = useCallback(async () => {
+  const downloadCSV = useCallback(() => {
     const csv = buildCSV(completedReviews);
-    try {
-      await navigator.clipboard.writeText(csv);
-      setCopyStatus("copied");
-      setTimeout(() => setCopyStatus(""), 2000);
-    } catch {
-      setCopyStatus("fallback");
-    }
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "prd_reviews.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }, [completedReviews]);
 
   const canAdd = currentText.trim().length > 0;
@@ -163,8 +173,8 @@ export default function App() {
 
       <div style={{ display: "flex", gap: 0, borderBottom: "1.5px solid #e5e7eb", marginBottom: "1.5rem" }}>
         {[
-          { key: "submit", label: "Submitted PRDs", icon: "ti-file-plus", count: queue.length },
-          { key: "results", label: "Results", icon: "ti-list-check", count: reviews.length },
+          { key: "submit", label: "Submit PRDs", icon: "ti-file-plus", count: queue.length },
+          { key: "results", label: "PRD Results", icon: "ti-list-check", count: reviews.length },
         ].map((tab) => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
             display: "flex", alignItems: "center", gap: 6, padding: "12px 20px", fontSize: 14, fontWeight: 500,
@@ -247,33 +257,14 @@ export default function App() {
           {reviews.length > 0 && (
             <div style={{ display: "flex", gap: 8, marginBottom: "1rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
               {completedReviews.length > 0 && (
-                <>
-                  <button onClick={copyCSV} style={BTN.secondary}>
-                    <i className={`ti ${copyStatus === "copied" ? "ti-check" : "ti-copy"}`} style={{ fontSize: 16 }} />
-                    {copyStatus === "copied" ? "Copied to clipboard" : "Copy CSV"}
-                  </button>
-                  <button onClick={() => setShowCSVPanel(!showCSVPanel)} style={BTN.secondary}>
-                    <i className={`ti ${showCSVPanel ? "ti-eye-off" : "ti-eye"}`} style={{ fontSize: 16 }} />
-                    {showCSVPanel ? "Hide CSV" : "View CSV"}
-                  </button>
-                </>
+                <button onClick={downloadCSV} style={BTN.secondary}>
+                  <i className="ti ti-download" style={{ fontSize: 16 }} />
+                  Download CSV
+                </button>
               )}
               <button onClick={clearReviews} style={BTN.danger}>
                 <i className="ti ti-trash" style={{ fontSize: 16 }} /> Clear all
               </button>
-            </div>
-          )}
-
-          {showCSVPanel && completedReviews.length > 0 && (
-            <div style={{ background: "#fff", border: "1.5px solid #e5e7eb", borderRadius: 12, padding: "1rem", marginBottom: "1rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <i className="ti ti-file-spreadsheet" style={{ fontSize: 17, color: "#3b82f6" }} />
-                  <span style={{ fontSize: 14, fontWeight: 500 }}>CSV preview</span>
-                </div>
-                <span style={{ fontSize: 12, color: "#9ca3af" }}>Select all and paste into Google Sheets or Excel</span>
-              </div>
-              <textarea readOnly value={buildCSV(completedReviews)} rows={8} onClick={(e) => e.target.select()} style={{ ...TEXTAREA_STYLE, fontSize: 12, fontFamily: "monospace", lineHeight: 1.5 }} />
             </div>
           )}
 
