@@ -75,11 +75,11 @@ function ModeBadge({ mode }) {
   );
 }
 
-async function reviewPRD(text, mode) {
+async function reviewPRD(text, mode, provider) {
   const res = await fetch("/api/review", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prd: text, mode: mode || "standard" }),
+    body: JSON.stringify({ prd: text, mode: mode || "standard", provider: provider || "openrouter" }),
   });
   if (!res.ok) {
     let msg = `Review failed (${res.status})`;
@@ -202,6 +202,7 @@ export default function App() {
   const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState("standard");
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [provider, setProvider] = useState("openrouter");
 
   const runReviews = useCallback(async (queue, clearQueue) => {
     if (queue.length === 0) return;
@@ -212,7 +213,7 @@ export default function App() {
       setProgress({ current: i + 1, total: queue.length });
       const item = queue[i];
       try {
-        const result = await reviewPRD(item.text, item.mode);
+        const result = await reviewPRD(item.text, item.mode, provider);
         setReviews((prev) => [...prev, { id: item.id, label: item.label, mode: item.mode, result, error: null }]);
       } catch (e) {
         setReviews((prev) => [...prev, { id: item.id, label: item.label, mode: item.mode, result: null, error: e.message }]);
@@ -259,6 +260,30 @@ export default function App() {
       <div style={{ marginBottom: "1.5rem" }}>
         <h1 style={{ fontSize: 24, fontWeight: 600, margin: "0 0 4px" }}>PRD Reviewer</h1>
         <p style={{ fontSize: 14, color: "#6b7280", margin: 0 }}>Add PRDs to the queue, review them all at once, and export results.</p>
+      </div>
+
+      {/* Provider toggle */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: "1rem", padding: "10px 16px", background: "#fff", border: "1.5px solid #e5e7eb", borderRadius: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "#6b7280" }}>AI Provider:</span>
+        <div style={{ display: "flex", gap: 0, borderRadius: 6, overflow: "hidden", border: "1.5px solid #e5e7eb" }}>
+          {[
+            { key: "openrouter", label: "OpenRouter (Free)" },
+            { key: "anthropic", label: "Anthropic (Claude)" },
+          ].map((p) => (
+            <button key={p.key} onClick={() => setProvider(p.key)}
+              style={{
+                padding: "6px 14px", fontSize: 13, fontWeight: 500, border: "none", cursor: "pointer",
+                background: provider === p.key ? "#3b82f6" : "#fff",
+                color: provider === p.key ? "#fff" : "#6b7280",
+                transition: "background 0.15s, color 0.15s",
+              }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <span style={{ fontSize: 12, color: "#9ca3af", marginLeft: 4 }}>
+          {provider === "anthropic" ? "Higher quality, uses API credits" : "Free tier, quality may vary"}
+        </span>
       </div>
 
       {/* Tabs */}
