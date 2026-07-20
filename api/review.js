@@ -86,7 +86,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
   }
 
-  const { prd, mode } = req.body;
+  const { prd, mode, provider } = req.body;
 
   if (!prd || typeof prd !== "string") {
     return res.status(400).json({ error: "Missing or invalid PRD content. Please paste text." });
@@ -110,33 +110,69 @@ export default async function handler(req, res) {
   const reviewMode = mode === "capstone" ? "capstone" : "standard";
   const systemPrompt = getSystemPrompt(reviewMode);
 
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
+  // Determine which provider to use
+  const useAnthropic = provider === "anthropic";
+
+  if (useAnthropic) {
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    if (!anthropicKey) {
+      return res.status(500).json({ error: "ANTHROPIC_API_KEY is not configured. Add it in Vercel → Settings → Environment Variables." });
+    }
+  }
+
+  const fetchUrl = useAnthropic
+    ? "https://api.anthropic.com/v1/messages"
+    : "https://openrouter.ai/api/v1/chat/completions";
+
+  const fetchHeaders = useAnthropic
+    ? {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      }
+    : {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
+      };
+
+  const fetchBody = useAnthropic
+    ? {
+        model: "claude-sonnet-4-6",
+        max_tokens: 1500,
+        system: systemPrompt,
+        messages: [{ role: "user", content: `Review this PRD:\n\n${trimmed}` }],
+      }
+    : {
         model: "openrouter/free",
         max_tokens: 1500,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: `Review this PRD:\n\n${trimmed}` },
         ],
-      }),
+      };
+
+  try {
+    const response = await fetch(fetchUrl, {
+      method: "POST",
+      headers: fetchHeaders,
+      body: JSON.stringify(fetchBody),
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      return res.status(response.status).json({ error: `OpenRouter API error (${response.status}): ${errText}` });
+      const providerName = useAnthropic ? "Anthropic" : "OpenRouter";
+      return res.status(response.status).json({ error: `${providerName} API error (${response.status}): ${errText}` });
     }
 
     const data = await response.json();
-    const raw = data.choices?.[0]?.message?.content || "";
+
+    // Anthropic returns data.content[].text, OpenRouter returns data.choices[].message.content
+    const raw = useAnthropic
+      ? (data.content?.map((b) => b.text || "").join("") || "")
+      : (data.choices?.[0]?.message?.content || "");
 
     if (!raw || raw.trim().length === 0) {
-      return res.status(502).json({ error: "The AI model returned an empty response. Try again — free models can be intermittent." });
+      return res.status(502).json({ error: "The AI model returned an empty response. Try again." });
     }
 
     const parsed = extractJSON(raw);
