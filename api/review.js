@@ -1,8 +1,9 @@
-const SYSTEM_PROMPT = `You are a PRD reviewer for a student builder program. Evaluate the PRD against these 4 criteria and return ONLY valid JSON — no markdown, no backticks, no preamble, no safety labels, no extra text before or after the JSON.
+const BASE_PROMPT = `You are a PRD reviewer for a student builder program. Evaluate the PRD against these 4 criteria and return ONLY valid JSON — no markdown, no backticks, no preamble, no safety labels, no extra text before or after the JSON.
 
 CRITERIA:
 1. Problem Statement & Purpose — Is the problem specific, grounded in a real user need, with a defined target user?
 2. Scope, Feasibility & Resources (3-Day Rule) — Can a small team build a working version in 3 days with free/accessible tools? Evaluate scope and resource dependencies together.
+RESOURCE_RULE_PLACEHOLDER
 3. Technical Clarity — Is the tech stack specified and appropriate? Can a developer start building from this document?
 4. User Definition & Core Feature Alignment — Do features serve the stated user and problem?
 
@@ -33,24 +34,25 @@ Respond with this exact JSON structure:
   "action_items": ["specific next step 1", "specific next step 2"]
 }`;
 
-// Extract a JSON object from a string that may contain extra text before/after it
-function extractJSON(text) {
-  // Remove markdown code fences
-  let cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+const STANDARD_RESOURCE_RULE = `For Criterion 2, the team must use only free-tier tools, open-source libraries, or publicly available APIs. No paid services, proprietary datasets, specialized hardware, or real user data collection are allowed. A project that would take 3 days with a paid API the team cannot access does not pass.`;
 
-  // Find the first { and the last } — the JSON object lives between them
+const CAPSTONE_RESOURCE_RULE = `For Criterion 2, this is a CAPSTONE project. The team has access to $20–$50 in API credits to use toward their build. Paid API dependencies are acceptable IF the estimated cost falls within that $20–$50 budget for development and initial testing. Flag any dependency that would clearly exceed this budget. Free-tier tools and open-source libraries are still preferred where possible, but paid APIs (such as OpenAI, Claude, hosted databases, or cloud services with usage-based pricing) are allowed within the budget. Specialized hardware and real user data collection that requires IRB or consent infrastructure are still not acceptable.`;
+
+function getSystemPrompt(mode) {
+  const rule = mode === "capstone" ? CAPSTONE_RESOURCE_RULE : STANDARD_RESOURCE_RULE;
+  return BASE_PROMPT.replace("RESOURCE_RULE_PLACEHOLDER", rule);
+}
+
+function extractJSON(text) {
+  let cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
-
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
     throw new Error("No JSON object found in model response");
   }
-
-  const jsonString = cleaned.substring(firstBrace, lastBrace + 1);
-  return JSON.parse(jsonString);
+  return JSON.parse(cleaned.substring(firstBrace, lastBrace + 1));
 }
 
-// Validate that the parsed review has the expected structure
 function validateReview(parsed) {
   if (!parsed.product_name || typeof parsed.product_name !== "string") {
     throw new Error("Missing or invalid product_name");
@@ -84,30 +86,29 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "OPENROUTER_API_KEY is not configured" });
   }
 
-  const { prd } = req.body;
+  const { prd, mode } = req.body;
 
-  // --- Input validation ---
   if (!prd || typeof prd !== "string") {
     return res.status(400).json({ error: "Missing or invalid PRD content. Please paste text." });
   }
 
   const trimmed = prd.trim();
 
-  // Reject empty or whitespace-only submissions
   if (trimmed.length === 0) {
     return res.status(400).json({ error: "PRD content is empty. Please paste the full PRD text." });
   }
 
-  // Reject very short submissions (likely not a real PRD)
   if (trimmed.length < 50) {
     return res.status(400).json({ error: "PRD content is too short to review. A PRD should include a problem statement, features, target users, and tech stack." });
   }
 
-  // Reject if content appears to be non-text (binary, base64, or code dumps with no natural language)
   const nonTextRatio = (trimmed.match(/[^\x20-\x7E\n\r\t]/g) || []).length / trimmed.length;
   if (nonTextRatio > 0.3) {
     return res.status(400).json({ error: "The submitted content does not appear to be a text document. Please paste the PRD as plain text." });
   }
+
+  const reviewMode = mode === "capstone" ? "capstone" : "standard";
+  const systemPrompt = getSystemPrompt(reviewMode);
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -120,7 +121,7 @@ export default async function handler(req, res) {
         model: "openrouter/free",
         max_tokens: 1500,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPrompt },
           { role: "user", content: `Review this PRD:\n\n${trimmed}` },
         ],
       }),
@@ -143,7 +144,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json(validated);
   } catch (err) {
-    // Distinguish between JSON parsing failures and other errors
     if (err.message.includes("JSON") || err.message.includes("Unexpected token")) {
       return res.status(502).json({ error: "The AI model returned a response that could not be parsed. This can happen with free models. Please try again." });
     }
